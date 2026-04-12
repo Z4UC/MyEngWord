@@ -27,14 +27,30 @@ def kelime_durum_guncelle(kelime, yeni_durum):
 
 # --- Gemini Fonksiyonu ---
 def gemini_ile_anlam_getir(kelime):
-    prompt = f"'{kelime}' kelimesinin Türkçe anlamını(türüyle) ve İngilizce örnek cümlesini JSON formatında 'anlam' ve 'kullanim' anahtarlarıyla ver."
+    # Talimatı çok netleştiriyoruz
+    prompt = f"""
+    Lütfen '{kelime}' kelimesi için şu bilgileri ver:
+    1. Anlamı: Kelimenin Türkçe anlamı ve parantez içinde türü (örn: isim, fiil).
+    2. Kullanım: Kelimenin geçtiği sadece bir tane İngilizce örnek cümle.
+    
+    Cevabını sadece şu JSON formatında ver, başka hiçbir açıklama ekleme:
+    {{"anlam": "kelime anlamı (türü)", "kullanim": "English example sentence."}}
+    """
     try:
         response = model.generate_content(prompt)
         import json
+        # Markdown işaretlerini temizle
         clean_response = response.text.replace("```json", "").replace("```", "").strip()
-        return json.loads(clean_response)
+        data = json.loads(clean_response)
+        
+        # Eğer Gemini yine de farklı anahtarlar gönderirse diye kontrol edelim
+        # Sadece metin kısmını döndürelim
+        return {
+            "anlam": data.get("anlam", "Anlam bulunamadı"),
+            "kullanim": data.get("kullanim", data.get("ingilizce_ornek", "Örnek bulunamadı"))
+        }
     except:
-        return None
+        return {"anlam": "Hata oluştu", "kullanim": "Hata oluştu"}
 
 # --- Uygulama Mantığı ---
 st.title("🧠 Kalıcı Kelime Kartları")
@@ -62,8 +78,13 @@ if st.session_state.mevcut_kelime:
         
         if st.session_state.gosterilen_anlam:
             st.divider()
-            st.success(f"**Anlam:** {st.session_state.gosterilen_anlam.get('anlam')}")
-            st.info(f"**Örnek:** {st.session_state.gosterilen_anlam.get('kullanim')}")
+            
+            # .get("anlam") diyerek sözlükten sadece o metni çekiyoruz
+            anlam_metni = st.session_state.gosterilen_anlam.get("anlam")
+            ornek_metni = st.session_state.gosterilen_anlam.get("kullanim")
+            
+            st.success(f"**Anlam:** {anlam_metni}")
+            st.info(f"**Örnek:** {ornek_metni}")
 
     col1, col2 = st.columns(2)
     with col1:
