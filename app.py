@@ -7,7 +7,7 @@ import random
 # --- Konfigürasyon ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-    model = genai.GenerativeModel('gemini-2.5-flash-lite')
+    model = genai.GenerativeModel('gemini-3.1-flash-lite-preview')
 except Exception as e:
     st.error("Gemini API hatası.")
     st.stop()
