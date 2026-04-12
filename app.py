@@ -20,10 +20,20 @@ def verileri_yukle():
     return conn.read(ttl=0) # ttl=0 her seferinde taze veri çeker
 
 def kelime_durum_guncelle(kelime, yeni_durum):
-    df = verileri_yukle()
-    df.loc[df['kelime'] == kelime, 'durum'] = yeni_durum
-    conn.update(data=df)
-    st.cache_data.clear()
+    try:
+        # Mevcut veriyi çek
+        df = conn.read(ttl=0)
+        
+        # Sadece ilgili satırı güncelle
+        df.loc[df['kelime'] == kelime, 'durum'] = yeni_durum
+        
+        # Güncellenmiş DataFrame'i geri gönder
+        conn.update(data=df)
+        
+        # Önbelleği temizle ki yeni veriyi hemen görsün
+        st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Güncelleme sırasında hata oluştu: {e}")
 
 # --- Gemini Fonksiyonu ---
 def gemini_ile_anlam_getir(kelime):
