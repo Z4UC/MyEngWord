@@ -1,123 +1,89 @@
 import streamlit as st
 import google.generativeai as genai
-import json
+from streamlit_gsheets import GSheetsConnection
+import pandas as pd
 import random
 
-# --- API Konfigürasyonu ---
-# secrets.toml dosyasından API anahtarını al
+# --- Konfigürasyon ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('gemini-2.5-flash-lite')
 except Exception as e:
-    st.error(f"API anahtarı yapılandırılamadı. Lütfen .streamlit/secrets.toml dosyanızı kontrol edin. Hata: {e}")
+    st.error("Gemini API hatası.")
     st.stop()
 
+# --- Google Sheets Bağlantısı ---
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- Yardımcı Fonksiyonlar ---
+def verileri_yukle():
+    # Google Sheets'ten verileri çek (ilk sayfa)
+    return conn.read(ttl=0) # ttl=0 her seferinde taze veri çeker
 
-def dosyadan_kelimeleri_yukle():
-    """JSON dosyalarından kelime listelerini yükler."""
-    try:
-        with open('ogrenilecekler.json', 'r', encoding='utf-8') as f:
-            ogrenilecekler = json.load(f)['kelimeler']
-        with open('bilinenler.json', 'r', encoding='utf-8') as f:
-            bilinenler = json.load(f)['kelimeler']
-        return ogrenilecekler, bilinenler
-    except FileNotFoundError:
-        # Dosyalar yoksa, boş listelerle başla
-        return ["word", "example", "test"], []
+def kelime_durum_guncelle(kelime, yeni_durum):
+    df = verileri_yukle()
+    df.loc[df['kelime'] == kelime, 'durum'] = yeni_durum
+    conn.update(data=df)
+    st.cache_data.clear()
 
-def kelimeleri_dosyaya_kaydet(ogrenilecekler, bilinenler):
-    """Kelime listelerini JSON dosyalarına kaydeder."""
-    with open('ogrenilecekler.json', 'w', encoding='utf-8') as f:
-        json.dump({"kelimeler": ogrenilecekler}, f, indent=2)
-    with open('bilinenler.json', 'w', encoding='utf-8') as f:
-        json.dump({"kelimeler": bilinenler}, f, indent=2)
-
+# --- Gemini Fonksiyonu ---
 def gemini_ile_anlam_getir(kelime):
-    """Gemini API'sine bağlanıp kelimenin anlamını ve kullanımını alır."""
-    prompt = f"""
-    Lütfen '{kelime}' kelimesinin Türkçe anlamını, parantez içinde türünü (ör: sıfat, fiil, isim, zarf gibi) ve bu kelimenin geçtiği basit bir İngilizce örnek cümle yaz.
-    Cevabını sadece JSON formatında ve 'anlam' ve 'kullanim' anahtarlarıyla ver. Başka hiçbir açıklama ekleme.
-    Örnek: {{"anlam": "Bir şeyin anlamı. (Türü)", "kullanim": "This is an example sentence."}}
-    """
+    prompt = f"'{kelime}' kelimesinin Türkçe anlamını(türüyle) ve İngilizce örnek cümlesini JSON formatında 'anlam' ve 'kullanim' anahtarlarıyla ver."
     try:
         response = model.generate_content(prompt)
-        # Bazen Gemini'nin cevabı markdown formatında gelebilir, temizleyelim.
+        import json
         clean_response = response.text.replace("```json", "").replace("```", "").strip()
         return json.loads(clean_response)
-    except Exception as e:
-        st.error(f"API'den cevap alınırken bir hata oluştu: {e}")
+    except:
         return None
 
-# --- Session State (Uygulama Hafızası) Başlatma ---
+# --- Uygulama Mantığı ---
+st.title("🧠 Kalıcı Kelime Kartları")
 
-# Sayfa yeniden yüklendiğinde hafızanın silinmemesi için session_state kullanılır.
-if 'ogrenilecekler' not in st.session_state:
-    st.session_state.ogrenilecekler, st.session_state.bilinenler = dosyadan_kelimeleri_yukle()
+df = verileri_yukle()
+# Durumu 0 olanlar öğrenileceklerdir
+ogrenilecekler_df = df[df['durum'] == 0]
+bilinenler_sayisi = len(df[df['durum'] == 1])
+
+if 'mevcut_kelime' not in st.session_state:
     st.session_state.mevcut_kelime = None
     st.session_state.gosterilen_anlam = None
 
-# Eğer öğrenilecek kelime kalmadıysa veya ilk defa çalışıyorsa yeni kelime seç
-if not st.session_state.mevcut_kelime and st.session_state.ogrenilecekler:
-    st.session_state.mevcut_kelime = random.choice(st.session_state.ogrenilecekler)
+if not st.session_state.mevcut_kelime and not ogrenilecekler_df.empty:
+    st.session_state.mevcut_kelime = random.choice(ogrenilecekler_df['kelime'].values)
 
-# --- ARAYÜZ (UI) ---
-
-st.title("🧠 Akıllı Kelime Kartları")
-st.write("Öğrenmek istediğin kelimenin üzerine tıkla ve anlamını Gemini'den öğren!")
-
-# Kelime kartı alanı
+# --- Arayüz ---
 if st.session_state.mevcut_kelime:
-    # Kartı bir container içinde gösterelim
     with st.container(border=True):
         st.header(st.session_state.mevcut_kelime.capitalize())
-
-        # Anlamı göster butonu
-        if st.button("Anlamı Göster", key="show_meaning"):
-            with st.spinner("Gemini düşünüyor..."):
+        
+        if st.button("Anlamı Göster"):
+            with st.spinner("Gemini geliyor..."):
                 st.session_state.gosterilen_anlam = gemini_ile_anlam_getir(st.session_state.mevcut_kelime)
         
-        # Eğer anlam yüklendiyse göster
         if st.session_state.gosterilen_anlam:
             st.divider()
-            st.success(f"**Anlamı:** {st.session_state.gosterilen_anlam.get('anlam', 'Bulunamadı.')}")
-            st.info(f"**Örnek Kullanım:** {st.session_state.gosterilen_anlam.get('kullanim', 'Bulunamadı.')}")
+            st.success(f"**Anlam:** {st.session_state.gosterilen_anlam.get('anlam')}")
+            st.info(f"**Örnek:** {st.session_state.gosterilen_anlam.get('kullanim')}")
 
-    st.write("") # Boşluk bırakmak için
-
-    # "Biliyorum" ve "Bilmiyorum" Butonları
     col1, col2 = st.columns(2)
-    
     with col1:
         if st.button("✅ Biliyorum", use_container_width=True):
-            kelime = st.session_state.mevcut_kelime
-            if kelime in st.session_state.ogrenilecekler:
-                st.session_state.ogrenilecekler.remove(kelime)
-                st.session_state.bilinenler.append(kelime)
-                kelimeleri_dosyaya_kaydet(st.session_state.ogrenilecekler, st.session_state.bilinenler)
-                st.toast(f"'{kelime}' bilinenlere eklendi!", icon="✅")
-            
-            # Reset and get a new word
+            kelime_durum_guncelle(st.session_state.mevcut_kelime, 1)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
-
     with col2:
-        if st.button("➡️ Sonraki Kelime (Bilmiyorum)", use_container_width=True):
-            st.toast("Bu kelimeyi sonra tekrar göreceksin!", icon="👍")
-            # Reset and get a new word
+        if st.button("➡️ Sonraki", use_container_width=True):
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
-
 else:
-    st.success("🎉 Tebrikler! Öğrenilecek tüm kelimeleri tamamladın!")
-    if st.button("Yeniden Başla"):
-        # bilinenler.json dosyasını sıfırlayarak yeniden başlatma mantığı eklenebilir.
-        st.warning("Bu özellik henüz eklenmedi.")
+    st.balloons()
+    st.success("Tüm kelimeler bitti!")
 
-# Kenar çubuğunda istatistikleri gösterelim
-st.sidebar.title("İstatistikler")
-st.sidebar.write(f"Öğrenilecek Kelime Sayısı: **{len(st.session_state.ogrenilecekler)}**")
-st.sidebar.write(f"Bilinen Kelime Sayısı: **{len(st.session_state.bilinenler)}**")
+# Yan Panel
+st.sidebar.write(f"Öğrenilecek: {len(ogrenilecekler_df)}")
+st.sidebar.write(f"Bilinen: {bilinenler_sayisi}")
+if st.sidebar.button("Listeyi Yenile"):
+    st.cache_data.clear()
+    st.rerun()
