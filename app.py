@@ -5,6 +5,9 @@ import pandas as pd
 import random
 import json
 
+# Sayfa ayarı (Tarayıcı sekmesinde başlık görünür, ekranda yer kaplamaz)
+st.set_page_config(page_title="Kelime Kartları", page_icon="🧠", layout="centered")
+
 # --- Konfigürasyon ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -18,7 +21,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def verileri_yukle():
     df = conn.read(ttl=0)
-    # Durum sütunundaki olası boşlukları veya tipleri sayıya çevir
     df['durum'] = pd.to_numeric(df['durum'], errors='coerce').fillna(0).astype(int)
     return df
 
@@ -26,11 +28,7 @@ def kelime_durum_guncelle(kelime, yeni_durum):
     try:
         df = conn.read(ttl=0)
         df['durum'] = pd.to_numeric(df['durum'], errors='coerce').fillna(0).astype(int)
-        
-        # Sadece ilgili satırın durumunu güncelle
         df.loc[df['kelime'] == kelime, 'durum'] = yeni_durum
-        
-        # Google Sheets'e geri yaz
         conn.update(data=df)
         st.cache_data.clear()
     except Exception as e:
@@ -50,7 +48,6 @@ def gemini_ile_anlam_getir(kelime):
         response = model.generate_content(prompt)
         clean_response = response.text.replace("```json", "").replace("```", "").strip()
         data = json.loads(clean_response)
-        
         return {
             "anlam": data.get("anlam", "Anlam bulunamadı"),
             "kullanim": data.get("kullanim", data.get("ingilizce_ornek", "Örnek bulunamadı"))
@@ -58,26 +55,21 @@ def gemini_ile_anlam_getir(kelime):
     except:
         return {"anlam": "Hata oluştu", "kullanim": "Hata oluştu"}
 
-# --- Uygulama Mantığı ---
-st.title("🧠 Kalıcı Kelime Kartları")
-
+# --- Veri Çekme & Filtreleme ---
 df = verileri_yukle()
-
-# Veri filtreleri
 hic_bilinmeyenler_df = df[df['durum'] == 0]
 calisilacaklar_df = df[df['durum'] == 1]
 tam_bilinenler_sayisi = len(df[df['durum'] == 2])
 
-# --- ÜST BUTONLAR / MOD SEÇİMİ ---
-st.write("### 🎯 Çalışma Modu")
+# --- Üst Seçim Butonları ---
 calisma_modu = st.radio(
-    label="Hangi gruptan kelime çalışmak istiyorsunuz?",
-    options=["🔴 Hiç Bilmediklerim", "🟡 Çalışmam Gerekenler (Tekrar)"],
+    label="Mod Seçimi",
+    options=["🔴 Hiç Bilmediklerim", "🟡 Çalışmam Gerekenler"],
     horizontal=True,
     label_visibility="collapsed"
 )
 
-# Mod değiştiğinde mevcut kelimeyi sıfırlama mekanizması
+# Mod değiştiğinde kartı sıfırla
 if 'aktif_mod' not in st.session_state:
     st.session_state.aktif_mod = calisma_modu
 
@@ -86,22 +78,22 @@ if st.session_state.aktif_mod != calisma_modu:
     st.session_state.mevcut_kelime = None
     st.session_state.gosterilen_anlam = None
 
-# Seçilen moda göre gösterilecek kelime havuzu
+# İlgili havuz
 if "Hiç Bilmediklerim" in calisma_modu:
     aktif_df = hic_bilinmeyenler_df
 else:
     aktif_df = calisilacaklar_df
 
-# Session state ilk tanımlamaları
+# Session state ilk tanımlama
 if 'mevcut_kelime' not in st.session_state:
     st.session_state.mevcut_kelime = None
     st.session_state.gosterilen_anlam = None
 
-# Havuzdan rastgele kelime seçme
+# Kelime seçimi
 if not st.session_state.mevcut_kelime and not aktif_df.empty:
     st.session_state.mevcut_kelime = random.choice(aktif_df['kelime'].values)
 
-# --- Arayüz / Kart Görünümü ---
+# --- Kelime Kartı Alanı ---
 if st.session_state.mevcut_kelime:
     with st.container(border=True):
         st.header(st.session_state.mevcut_kelime.capitalize())
@@ -118,27 +110,25 @@ if st.session_state.mevcut_kelime:
             st.success(f"**Anlam:** {anlam_metni}")
             st.info(f"**Örnek:** {ornek_metni}")
 
-    st.write("#### Kelimeyi Değerlendir:")
-    
-    # --- ALTTAKİ 3 BUTON ---
+    # --- Değerlendirme Butonları ---
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("❌ Hiç Bilmiyorum", use_container_width=True, help="Kelimeyi hiç bilinmeyenler (0) havuzuna atar."):
+        if st.button("❌ Bilmiyorum", use_container_width=True):
             kelime_durum_guncelle(st.session_state.mevcut_kelime, 0)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
 
     with col2:
-        if st.button("🟡 Çalışmam Lazım", use_container_width=True, help="Zor/unutulan kelimeler (1) havuzuna atar."):
+        if st.button("🟡 Tekrar Et", use_container_width=True):
             kelime_durum_guncelle(st.session_state.mevcut_kelime, 1)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
 
     with col3:
-        if st.button("✅ Kolay / Biliyorum", use_container_width=True, help="Kelimeyi tamamen öğrenildi (2) olarak işaretler."):
+        if st.button("✅ Biliyorum", use_container_width=True):
             kelime_durum_guncelle(st.session_state.mevcut_kelime, 2)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
@@ -146,13 +136,13 @@ if st.session_state.mevcut_kelime:
 
 else:
     st.balloons()
-    st.success(f"Tebrikler! Seçili gruptaki ({calisma_modu}) tüm kelimeleri tamamladınız.")
+    st.success(f"Tebrikler! Bu gruptaki ({calisma_modu}) tüm kelimeler bitti.")
 
-# --- Yan Panel (İstatistikler) ---
+# --- Yan Panel ---
 st.sidebar.header("📊 Durum Özeti")
-st.sidebar.metric("🔴 Hiç Bilinmeyenler", len(hic_bilinmeyenler_df))
-st.sidebar.metric("🟡 Çalışılacak / Tekrar", len(calisilacaklar_df))
-st.sidebar.metric("🟢 Tamamen Öğrenilenler", tam_bilinenler_sayisi)
+st.sidebar.metric("🔴 Hiç Bilinmeyen", len(hic_bilinmeyenler_df))
+st.sidebar.metric("🟡 Çalışılacak", len(calisilacaklar_df))
+st.sidebar.metric("🟢 Öğrenilen", tam_bilinenler_sayisi)
 
 st.sidebar.divider()
 if st.sidebar.button("🔄 Listeyi Yenile", use_container_width=True):
