@@ -4,7 +4,6 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import random
 import json
-import time
 
 st.set_page_config(page_title="Kelime Kartları", page_icon="🧠", layout="centered")
 
@@ -45,34 +44,27 @@ except Exception as e:
 # --- Google Sheets Bağlantısı ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def verileri_yukle(tekrar_sayisi=3):
-    """Google Sheets API kotasına takılmamak için retry mekanizmalı okuma"""
-    for i in range(tekrar_sayisi):
-        try:
-            df = conn.read(ttl=0)
-            df['durum'] = pd.to_numeric(df['durum'], errors='coerce').fillna(0).astype(int)
-            return df
-        except Exception as e:
-            if i < tekrar_sayisi - 1:
-                time.sleep(1.5)  # Hata durumunda 1.5 sn bekle ve tekrar dene
-            else:
-                st.warning("⚠️ Google Sheets bağlantısı yoğun. Lütfen 1-2 saniye bekleyip butona tekrar basın.")
-                return pd.DataFrame(columns=['kelime', 'durum'])
-
-def kelime_durum_guncelle(mevcut_df, kelime, yeni_durum):
-    """Gereksiz read yapmadan doğrudan mevcut dataframe'i günceller ve kaydeder"""
+# --- 1. VERİLERİ HAFIZAYA (SESSION STATE) ALMA ---
+# Sayfa her yenilendiğinde Google'a gitmez, sadece ilk açılışta 1 kere çeker!
+if 'df' not in st.session_state:
     try:
-        mevcut_df.loc[mevcut_df['kelime'] == kelime, 'durum'] = int(yeni_durum)
-        conn.update(data=mevcut_df)
-        st.cache_data.clear()
+        raw_df = conn.read(ttl=0)
+        raw_df['durum'] = pd.to_numeric(raw_df['durum'], errors='coerce').fillna(0).astype(int)
+        st.session_state.df = raw_df
     except Exception as e:
-        time.sleep(1)
-        try:
-            # 2. deneme
-            conn.update(data=mevcut_df)
-            st.cache_data.clear()
-        except:
-            st.error("Google Sheets güncellenirken bir sorun oluştu. Değişiklik kaydedilemedi.")
+        st.error("Google Sheets'e bağlanılamadı. Lütfen 30 saniye bekleyip sayfayı yenileyin.")
+        st.stop()
+
+def kelime_durum_guncelle(kelime, yeni_durum):
+    """Hafızadaki veriyi günceller ve Google Sheets'e tek bir yazma isteği atar"""
+    # 1. Önce hafızayı güncelle (Arayüz anında değişir)
+    st.session_state.df.loc[st.session_state.df['kelime'] == kelime, 'durum'] = int(yeni_durum)
+    
+    # 2. Google Sheets'e yazmayı dene (Kotaya takılsa bile kullanıcı akışı bozulmaz)
+    try:
+        conn.update(data=st.session_state.df)
+    except Exception:
+        st.toast("⚠️ Google API yoğun, değişiklik yerel hafızaya kaydedildi.", icon="⚠️")
 
 # --- Gemini Fonksiyonu ---
 def gemini_ile_anlam_getir(kelime):
@@ -95,13 +87,8 @@ def gemini_ile_anlam_getir(kelime):
     except:
         return {"anlam": "Hata oluştu", "kullanim": "Hata oluştu"}
 
-# --- Verileri Getir ---
-df = verileri_yukle()
-
-if df.empty:
-    st.info("Veriler yükleniyor...")
-    st.stop()
-
+# --- Filtrelemeler (Doğrudan Hafızadan Yapılır) ---
+df = st.session_state.df
 hic_bilinmeyenler_df = df[df['durum'] == 0]
 calisilacaklar_df = df[df['durum'] == 1]
 tam_bilinenler_sayisi = len(df[df['durum'] == 2])
@@ -155,21 +142,21 @@ if st.session_state.mevcut_kelime:
     
     with col1:
         if st.button("❌ Bilmiyorum", use_container_width=True):
-            kelime_durum_guncelle(df, st.session_state.mevcut_kelime, 0)
+            kelime_durum_guncelle(st.session_state.mevcut_kelime, 0)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
 
     with col2:
         if st.button("🟡 Tekrar Et", use_container_width=True):
-            kelime_durum_guncelle(df, st.session_state.mevcut_kelime, 1)
+            kelime_durum_guncelle(st.session_state.mevcut_kelime, 1)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
 
     with col3:
         if st.button("✅ Biliyorum", use_container_width=True):
-            kelime_durum_guncelle(df, st.session_state.mevcut_kelime, 2)
+            kelime_durum_guncelle(st.session_state.mevcut_kelime, 2)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
@@ -185,6 +172,8 @@ st.sidebar.metric("🟡 Çalışılacak", len(calisilacaklar_df))
 st.sidebar.metric("🟢 Öğrenilen", tam_bilinenler_sayisi)
 
 st.sidebar.divider()
-if st.sidebar.button("🔄 Listeyi Yenile", use_container_width=True):
+if st.sidebar.button("🔄 Listeyi Yenile (Sheet'ten Çek)", use_container_width=True):
+    if 'df' in st.session_state:
+        del st.session_state['df']
     st.cache_data.clear()
     st.rerun()
