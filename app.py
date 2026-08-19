@@ -4,26 +4,24 @@ from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 import random
 import json
+import time
 
 st.set_page_config(page_title="Kelime Kartları", page_icon="🧠", layout="centered")
 
-# --- Sayfa ve Arayüz CSS Düzenlemeleri ---
+# --- CSS Düzenlemeleri ---
 st.markdown("""
 <style>
-    /* Üst kısmı görünür kılmak için boşluğu açtık, alt kısmı kompakt tuttuk */
     .block-container {
         padding-top: 3rem !important;
         padding-bottom: 1.5rem !important;
         max-width: 580px;
     }
-    /* Kelime başlığı boyutu */
     .kelime-baslik {
         font-size: 1.35rem;
         font-weight: 700;
         text-align: center;
         margin-bottom: 0.2rem;
     }
-    /* Kompakt ve dinamik anlam kutusu */
     .anlam-kutusu {
         background-color: rgba(128, 128, 128, 0.08);
         border-left: 3px solid #2e7d32;
@@ -36,31 +34,45 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Konfigürasyon ---
+# --- Gemini Konfigürasyon ---
 try:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
     model = genai.GenerativeModel('gemini-flash-lite-latest')
 except Exception as e:
-    st.error("Gemini API hatası.")
+    st.error("Gemini API anahtarı doğrulanamadı.")
     st.stop()
 
 # --- Google Sheets Bağlantısı ---
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-def verileri_yukle():
-    df = conn.read(ttl=0)
-    df['durum'] = pd.to_numeric(df['durum'], errors='coerce').fillna(0).astype(int)
-    return df
+def verileri_yukle(tekrar_sayisi=3):
+    """Google Sheets API kotasına takılmamak için retry mekanizmalı okuma"""
+    for i in range(tekrar_sayisi):
+        try:
+            df = conn.read(ttl=0)
+            df['durum'] = pd.to_numeric(df['durum'], errors='coerce').fillna(0).astype(int)
+            return df
+        except Exception as e:
+            if i < tekrar_sayisi - 1:
+                time.sleep(1.5)  # Hata durumunda 1.5 sn bekle ve tekrar dene
+            else:
+                st.warning("⚠️ Google Sheets bağlantısı yoğun. Lütfen 1-2 saniye bekleyip butona tekrar basın.")
+                return pd.DataFrame(columns=['kelime', 'durum'])
 
-def kelime_durum_guncelle(kelime, yeni_durum):
+def kelime_durum_guncelle(mevcut_df, kelime, yeni_durum):
+    """Gereksiz read yapmadan doğrudan mevcut dataframe'i günceller ve kaydeder"""
     try:
-        df = conn.read(ttl=0)
-        df['durum'] = pd.to_numeric(df['durum'], errors='coerce').fillna(0).astype(int)
-        df.loc[df['kelime'] == kelime, 'durum'] = yeni_durum
-        conn.update(data=df)
+        mevcut_df.loc[mevcut_df['kelime'] == kelime, 'durum'] = int(yeni_durum)
+        conn.update(data=mevcut_df)
         st.cache_data.clear()
     except Exception as e:
-        st.error(f"Güncelleme hatası: {e}")
+        time.sleep(1)
+        try:
+            # 2. deneme
+            conn.update(data=mevcut_df)
+            st.cache_data.clear()
+        except:
+            st.error("Google Sheets güncellenirken bir sorun oluştu. Değişiklik kaydedilemedi.")
 
 # --- Gemini Fonksiyonu ---
 def gemini_ile_anlam_getir(kelime):
@@ -83,8 +95,13 @@ def gemini_ile_anlam_getir(kelime):
     except:
         return {"anlam": "Hata oluştu", "kullanim": "Hata oluştu"}
 
-# --- Veri Çekme & Filtreleme ---
+# --- Verileri Getir ---
 df = verileri_yukle()
+
+if df.empty:
+    st.info("Veriler yükleniyor...")
+    st.stop()
+
 hic_bilinmeyenler_df = df[df['durum'] == 0]
 calisilacaklar_df = df[df['durum'] == 1]
 tam_bilinenler_sayisi = len(df[df['durum'] == 2])
@@ -119,12 +136,10 @@ if st.session_state.mevcut_kelime:
     with st.container(border=True):
         st.markdown(f"<div class='kelime-baslik'>{st.session_state.mevcut_kelime.capitalize()}</div>", unsafe_allow_html=True)
         
-        # Buton artık kalıcı, tıklandığında anlamı çeker
         if st.button("👁️ Anlamı Göster", use_container_width=True):
             with st.spinner("Getiriliyor..."):
                 st.session_state.gosterilen_anlam = gemini_ile_anlam_getir(st.session_state.mevcut_kelime)
         
-        # Anlam çekildiyse butonun altında gösterilir
         if st.session_state.gosterilen_anlam:
             anlam = st.session_state.gosterilen_anlam.get("anlam")
             ornek = st.session_state.gosterilen_anlam.get("kullanim")
@@ -140,21 +155,21 @@ if st.session_state.mevcut_kelime:
     
     with col1:
         if st.button("❌ Bilmiyorum", use_container_width=True):
-            kelime_durum_guncelle(st.session_state.mevcut_kelime, 0)
+            kelime_durum_guncelle(df, st.session_state.mevcut_kelime, 0)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
 
     with col2:
         if st.button("🟡 Tekrar Et", use_container_width=True):
-            kelime_durum_guncelle(st.session_state.mevcut_kelime, 1)
+            kelime_durum_guncelle(df, st.session_state.mevcut_kelime, 1)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
 
     with col3:
         if st.button("✅ Biliyorum", use_container_width=True):
-            kelime_durum_guncelle(st.session_state.mevcut_kelime, 2)
+            kelime_durum_guncelle(df, st.session_state.mevcut_kelime, 2)
             st.session_state.mevcut_kelime = None
             st.session_state.gosterilen_anlam = None
             st.rerun()
