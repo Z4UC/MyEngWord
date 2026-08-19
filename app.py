@@ -7,30 +7,31 @@ import json
 
 st.set_page_config(page_title="Kelime Kartları", page_icon="🧠", layout="centered")
 
-# --- Sayfayı Tek Ekrana Sığdıran CSS Düzenlemeleri ---
+# --- Sayfa ve Arayüz CSS Düzenlemeleri ---
 st.markdown("""
 <style>
-    /* Üst ve alt boşlukları minimuma indir */
+    /* Üst kısmı görünür kılmak için boşluğu açtık, alt kısmı kompakt tuttuk */
     .block-container {
-        padding-top: 1.2rem !important;
-        padding-bottom: 1rem !important;
-        max-width: 600px;
+        padding-top: 3rem !important;
+        padding-bottom: 1.5rem !important;
+        max-width: 580px;
     }
     /* Kelime başlığı boyutu */
     .kelime-baslik {
-        font-size: 1.45rem;
+        font-size: 1.35rem;
         font-weight: 700;
         text-align: center;
-        margin-bottom: 0.4rem;
+        margin-bottom: 0.2rem;
     }
-    /* Anlam ve örnek için ince/kompakt kart */
+    /* Kompakt ve dinamik anlam kutusu */
     .anlam-kutusu {
         background-color: rgba(128, 128, 128, 0.08);
         border-left: 3px solid #2e7d32;
-        padding: 8px 12px;
+        padding: 6px 10px;
         border-radius: 6px;
-        font-size: 0.90rem;
-        line-height: 1.4;
+        font-size: 0.88rem;
+        line-height: 1.35;
+        margin-top: 6px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -113,24 +114,24 @@ if 'mevcut_kelime' not in st.session_state:
 if not st.session_state.mevcut_kelime and not aktif_df.empty:
     st.session_state.mevcut_kelime = random.choice(aktif_df['kelime'].values)
 
-# --- Kompakt Kart Alanı ---
+# --- Kelime Kartı Alanı ---
 if st.session_state.mevcut_kelime:
     with st.container(border=True):
         st.markdown(f"<div class='kelime-baslik'>{st.session_state.mevcut_kelime.capitalize()}</div>", unsafe_allow_html=True)
         
-        # Anlam henüz açılmadıysa butonu göster, açıldıysa buton yerine kompakt bilgiyi getir
-        if not st.session_state.gosterilen_anlam:
-            if st.button("👁️ Anlamı Göster", use_container_width=True):
-                with st.spinner("Getiriliyor..."):
-                    st.session_state.gosterilen_anlam = gemini_ile_anlam_getir(st.session_state.mevcut_kelime)
-                st.rerun()
-        else:
+        # Buton artık kalıcı, tıklandığında anlamı çeker
+        if st.button("👁️ Anlamı Göster", use_container_width=True):
+            with st.spinner("Getiriliyor..."):
+                st.session_state.gosterilen_anlam = gemini_ile_anlam_getir(st.session_state.mevcut_kelime)
+        
+        # Anlam çekildiyse butonun altında gösterilir
+        if st.session_state.gosterilen_anlam:
             anlam = st.session_state.gosterilen_anlam.get("anlam")
             ornek = st.session_state.gosterilen_anlam.get("kullanim")
             st.markdown(f"""
             <div class='anlam-kutusu'>
                 <div><b>📖 Anlam:</b> {anlam}</div>
-                <div style="margin-top: 3px;"><b>💡 Örnek:</b> <i>{ornek}</i></div>
+                <div style="margin-top: 2px;"><b>💡 Örnek:</b> <i>{ornek}</i></div>
             </div>
             """, unsafe_allow_html=True)
 
